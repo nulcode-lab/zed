@@ -9261,7 +9261,7 @@ impl LineWithInvisibles {
             .collect();
 
         let mut output_runs: Vec<TextRun> = Vec::with_capacity(text_runs.len());
-        let mut byte_offset = 0usize;
+        let mut byte_offset = start_col_offset;
         let mut segment_ix = 0usize;
 
         for text_run in text_runs.iter() {
