@@ -9005,7 +9005,7 @@ impl LineWithInvisibles {
                     let text_runs: &[TextRun] = if segments.is_empty() {
                         &styles
                     } else {
-                        &Self::split_runs_by_bg_segments(&styles, segments, min_contrast, len)
+                        &Self::split_runs_by_bg_segments(&styles, segments, min_contrast, len, &line)
                     };
                     let shaped_line = window.text_system().shape_line(
                         line.clone().into(),
@@ -9094,7 +9094,7 @@ impl LineWithInvisibles {
                         let text_runs = if segments.is_empty() {
                             &styles
                         } else {
-                            &Self::split_runs_by_bg_segments(&styles, segments, min_contrast, len)
+                            &Self::split_runs_by_bg_segments(&styles, segments, min_contrast, len, &line)
                         };
                         let shaped_line = window.text_system().shape_line(
                             line.clone().into(),
@@ -9194,67 +9194,126 @@ impl LineWithInvisibles {
 
     /// Takes text runs and non-overlapping left-to-right background ranges with color.
     /// Returns new text runs with adjusted contrast as per background ranges.
+    ///
+    /// `text` is the full line content corresponding to `text_runs` concatenated.
+    /// `start_col_offset` is the byte offset of the first run into the logical line
+    /// (used when a single display row is built from multiple fragments due to inlays).
     fn split_runs_by_bg_segments(
         text_runs: &[TextRun],
         bg_segments: &[(Range<DisplayPoint>, Hsla)],
         min_contrast: f32,
         start_col_offset: usize,
+        text: &str,
     ) -> Vec<TextRun> {
+        let text_bytes = text.as_bytes();
+
+        // Build display-col → byte-offset mapping for the text.
+        // For ASCII text, display_col == byte_offset.
+        // For CJK/emoji, each character is 2 display columns but 3-4 bytes.
+        let col_to_byte = |target_col: usize| -> usize {
+            let mut byte_pos = 0;
+            let mut display_col = 0;
+            while byte_pos < text_bytes.len() {
+                if display_col >= target_col {
+                    break;
+                }
+                let b = text_bytes[byte_pos];
+                let (char_width, char_len) = if b < 0x80 {
+                    (1, 1)
+                } else if let Ok(s) = std::str::from_utf8(&text_bytes[byte_pos..byte_pos + 4.min(text_bytes.len() - byte_pos)]) {
+                    if let Some(c) = s.chars().next() {
+                        let w = if c == '\t' {
+                            4 - (display_col % 4)
+                        } else {
+                            2
+                        };
+                        (w, c.len_utf8())
+                    } else {
+                        (1, 1)
+                    }
+                } else {
+                    (1, 1)
+                };
+                display_col += char_width;
+                byte_pos += char_len;
+            }
+            byte_pos
+        };
+
+        // Convert bg_segments from display-column ranges to byte-offset ranges.
+        let byte_segments: Vec<(Range<usize>, Hsla)> = bg_segments
+            .iter()
+            .filter_map(|(range, color)| {
+                let start = range.start.column() as usize;
+                let end = range.end.column() as usize;
+                if end == u32::MAX as usize {
+                    Some((col_to_byte(start)..text_bytes.len(), *color))
+                } else {
+                    let byte_start = col_to_byte(start);
+                    let byte_end = col_to_byte(end);
+                    if byte_start < byte_end {
+                        Some((byte_start..byte_end, *color))
+                    } else {
+                        None
+                    }
+                }
+            })
+            .collect();
+
         let mut output_runs: Vec<TextRun> = Vec::with_capacity(text_runs.len());
-        let mut line_col = start_col_offset;
+        let mut byte_offset = 0usize;
         let mut segment_ix = 0usize;
 
         for text_run in text_runs.iter() {
-            let run_start_col = line_col;
-            let run_end_col = run_start_col + text_run.len;
-            while segment_ix < bg_segments.len()
-                && (bg_segments[segment_ix].0.end.column() as usize) <= run_start_col
+            let run_byte_start = byte_offset;
+            let run_byte_end = run_byte_start + text_run.len;
+
+            while segment_ix < byte_segments.len()
+                && byte_segments[segment_ix].0.end <= run_byte_start
             {
                 segment_ix += 1;
             }
-            let mut cursor_col = run_start_col;
+
+            let mut cursor = run_byte_start;
             let mut local_segment_ix = segment_ix;
-            while local_segment_ix < bg_segments.len() {
-                let (range, segment_color) = &bg_segments[local_segment_ix];
-                let segment_start_col = range.start.column() as usize;
-                let segment_end_col = range.end.column() as usize;
-                if segment_start_col >= run_end_col {
+            while local_segment_ix < byte_segments.len() {
+                let (ref range, segment_color) = byte_segments[local_segment_ix];
+                if range.start >= run_byte_end {
                     break;
                 }
-                if segment_start_col > cursor_col {
-                    let span_len = segment_start_col - cursor_col;
+                if range.start > cursor {
                     output_runs.push(TextRun {
-                        len: span_len,
+                        len: range.start - cursor,
                         font: text_run.font.clone(),
                         color: text_run.color,
                         background_color: text_run.background_color,
                         underline: text_run.underline,
                         strikethrough: text_run.strikethrough,
                     });
-                    cursor_col = segment_start_col;
+                    cursor = range.start;
                 }
-                let segment_slice_end_col = segment_end_col.min(run_end_col);
-                if segment_slice_end_col > cursor_col {
+                let seg_end = range.end.min(run_byte_end);
+                if seg_end > cursor {
                     let new_text_color =
-                        ensure_minimum_contrast(text_run.color, *segment_color, min_contrast);
+                        ensure_minimum_contrast(text_run.color, segment_color, min_contrast);
                     output_runs.push(TextRun {
-                        len: segment_slice_end_col - cursor_col,
+                        len: seg_end - cursor,
                         font: text_run.font.clone(),
                         color: new_text_color,
                         background_color: text_run.background_color,
                         underline: text_run.underline,
                         strikethrough: text_run.strikethrough,
                     });
-                    cursor_col = segment_slice_end_col;
+                    cursor = seg_end;
                 }
-                if segment_end_col >= run_end_col {
+                if range.end >= run_byte_end {
                     break;
                 }
                 local_segment_ix += 1;
             }
-            if cursor_col < run_end_col {
+            if cursor < run_byte_end {
                 output_runs.push(TextRun {
-                    len: run_end_col - cursor_col,
+                    len: run_byte_end - cursor,
                     font: text_run.font.clone(),
                     color: text_run.color,
                     background_color: text_run.background_color,
@@ -9262,7 +9321,7 @@ impl LineWithInvisibles {
                     strikethrough: text_run.strikethrough,
                 });
             }
-            line_col = run_end_col;
+            byte_offset = run_byte_end;
             segment_ix = local_segment_ix;
         }
         output_runs
@@ -13919,7 +13978,8 @@ mod tests {
         {
             let runs = vec![generate_test_run(20, text_color)];
             let segs = vec![(dx(5, 10), bg_1), (dx(12, 16), bg_2)];
-            let out = LineWithInvisibles::split_runs_by_bg_segments(&runs, &segs, min_contrast, 0);
+            let text = "a".repeat(20);
+            let out = LineWithInvisibles::split_runs_by_bg_segments(&runs, &segs, min_contrast, 0, &text);
             // Expected slices: [0,5) [5,10) [10,12) [12,16) [16,20)
             assert_eq!(
                 out.iter().map(|r| r.len).collect::<Vec<_>>(),
@@ -13939,7 +13999,8 @@ mod tests {
                 generate_test_run(7, text_color),
             ];
             let segs = vec![(dx(6, u32::MAX), bg_1)];
-            let out = LineWithInvisibles::split_runs_by_bg_segments(&runs, &segs, min_contrast, 0);
+            let text = "a".repeat(15);
+            let out = LineWithInvisibles::split_runs_by_bg_segments(&runs, &segs, min_contrast, 0, &text);
             // Expected slices across runs: [0,6) [6,8) | [0,7)
             assert_eq!(out.iter().map(|r| r.len).collect::<Vec<_>>(), vec![6, 2, 7]);
             assert_eq!(out[0].color, text_color);
@@ -13958,7 +14019,8 @@ mod tests {
             ];
             // selecting "🌍 世"
             let segs = vec![(dx(6, 14), bg_1)];
-            let out = LineWithInvisibles::split_runs_by_bg_segments(&runs, &segs, min_contrast, 0);
+            let text = "Hello 🌍 世界!";
+            let out = LineWithInvisibles::split_runs_by_bg_segments(&runs, &segs, min_contrast, 0, text);
             // "Hello" | " " | "🌍 " | "世" | "界" | "!"
             assert_eq!(
                 out.iter().map(|r| r.len).collect::<Vec<_>>(),
@@ -13986,7 +14048,8 @@ mod tests {
                 generate_test_run(2, text_color), // ab
                 generate_test_run(4, text_color), // cdef
             ];
-            let out = LineWithInvisibles::split_runs_by_bg_segments(&runs, &segs, min_contrast, 0);
+            let text = "abcdef";
+            let out = LineWithInvisibles::split_runs_by_bg_segments(&runs, &segs, min_contrast, 0, text);
             // new splits "ab", "cd", "ef"
             assert_eq!(out.iter().map(|r| r.len).collect::<Vec<_>>(), vec![2, 2, 2]);
             assert_eq!(out[0].color, text_color);
@@ -13999,7 +14062,8 @@ mod tests {
                 generate_test_run(2, text_color), // jk
                 generate_test_run(3, text_color), // lmn
             ];
-            let out = LineWithInvisibles::split_runs_by_bg_segments(&runs, &segs, min_contrast, 6); // 2 + 4 from first run
+            let text = "ghijklmn";
+            let out = LineWithInvisibles::split_runs_by_bg_segments(&runs, &segs, min_contrast, 6, text); // 2 + 4 from first run
             // new splits "gh", "i", "jk", "l", "mn"
             assert_eq!(
                 out.iter().map(|r| r.len).collect::<Vec<_>>(),
@@ -14016,7 +14080,8 @@ mod tests {
                 generate_test_run(1, text_color), // o
                 generate_test_run(4, text_color), // pqrs
             ];
-            let out = LineWithInvisibles::split_runs_by_bg_segments(&runs, &segs, min_contrast, 14); // 6 + 3 + 2 + 3 from first two runs
+            let text = "opqrs";
+            let out = LineWithInvisibles::split_runs_by_bg_segments(&runs, &segs, min_contrast, 14, text); // 6 + 3 + 2 + 3 from first two runs
             // new splits "o", "p", "qr", "s"
             assert_eq!(
                 out.iter().map(|r| r.len).collect::<Vec<_>>(),
