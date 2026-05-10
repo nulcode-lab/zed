@@ -557,8 +557,15 @@ impl DirectWriteState {
                     f32::INFINITY,
                     f32::INFINITY,
                 )?;
-                let current_text = &text[utf8_offset..(utf8_offset + first_run.len)];
-                utf8_offset += first_run.len;
+                let mut end = utf8_offset + first_run.len;
+                if end > text.len() {
+                    end = text.len();
+                }
+                while end < text.len() && !text.is_char_boundary(end) {
+                    end += 1;
+                }
+                let current_text = &text[utf8_offset..end];
+                utf8_offset = end;
                 let current_text_utf16_length = current_text.encode_utf16().count() as u32;
                 let text_range = DWRITE_TEXT_RANGE {
                     startPosition: utf16_offset,
@@ -582,8 +589,15 @@ impl DirectWriteState {
             let mut break_ligatures = true;
             for run in &font_runs[1..] {
                 let font_info = &self.fonts[run.font_id.0];
-                let current_text = &text[utf8_offset..(utf8_offset + run.len)];
-                utf8_offset += run.len;
+                let mut end = utf8_offset + run.len;
+                if end > text.len() {
+                    end = text.len();
+                }
+                while end < text.len() && !text.is_char_boundary(end) {
+                    end += 1;
+                }
+                let current_text = &text[utf8_offset..end];
+                utf8_offset = end;
                 let current_text_utf16_length = current_text.encode_utf16().count() as u32;
 
                 let collection = &font_info.font_collection;
