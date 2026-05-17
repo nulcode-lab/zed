@@ -4457,8 +4457,25 @@ impl Window {
     }
 
     fn dispatch_key_event(&mut self, event: &dyn Any, cx: &mut App) {
-        if self.invalidator.is_dirty() {
+        let is_held_repeat = event
+            .downcast_ref::<KeyDownEvent>()
+            .map_or(false, |e| e.is_held && e.prefer_character_input);
+
+        if !is_held_repeat && self.invalidator.is_dirty() {
             self.draw(cx).clear();
+        }
+
+        if is_held_repeat {
+            self.finish_dispatch_key_event(
+                event,
+                self.rendered_frame
+                    .dispatch_tree
+                    .dispatch_path(self.focus_node_id_in_rendered_frame(self.focus)),
+                self.context_stack(),
+                cx,
+            );
+            self.pending_input_changed(cx);
+            return;
         }
 
         let node_id = self.focus_node_id_in_rendered_frame(self.focus);
