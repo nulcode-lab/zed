@@ -100,20 +100,8 @@ impl WindowsWindowInner {
             WM_MOUSEHWHEEL => self.handle_mouse_horizontal_wheel_msg(handle, wparam, lparam),
             WM_SYSKEYUP => self.handle_syskeyup_msg(wparam, lparam),
             WM_KEYUP => self.handle_keyup_msg(wparam, lparam),
-            WM_GPUI_KEYDOWN => {
-                if self.state.ime_composing.get() {
-                    Some(0)
-                } else {
-                    self.handle_keydown_msg(wparam, lparam)
-                }
-            }
-            WM_CHAR => {
-                if self.state.ime_composing.get() {
-                    Some(0)
-                } else {
-                    self.handle_char_msg(wparam)
-                }
-            }
+            WM_GPUI_KEYDOWN => self.handle_keydown_msg(wparam, lparam),
+            WM_CHAR => self.handle_char_msg(wparam),
             WM_IME_STARTCOMPOSITION => {
                 self.state.ime_composing.set(true);
                 self.handle_ime_position(handle)
