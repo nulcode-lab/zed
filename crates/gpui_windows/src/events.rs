@@ -751,6 +751,7 @@ impl WindowsWindowInner {
 
         if !activated {
             this.state.cursor_visible.store(true, Ordering::Relaxed);
+            this.state.ime_composing.set(false);
         }
 
         // When the window is activated (gains focus), reset the modifier tracking state.
