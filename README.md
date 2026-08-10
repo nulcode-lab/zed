@@ -29,6 +29,8 @@ Also... we're hiring! Check out our [jobs](https://zed.dev/jobs) page for open r
 
 ### Licensing
 
+Zed source code is licensed primarily under GPL-3.0-or-later, with Apache-2.0 components where marked.
+
 License information for third party dependencies must be correctly provided for CI to pass.
 
 We use [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) to automatically comply with open source licenses. If CI is failing, check the following:
@@ -44,3 +46,4 @@ Zed is developed by **Zed Industries, Inc.**, a for-profit company.
 If you’d like to financially support the project, you can do so via GitHub Sponsors.
 Sponsorships go directly to Zed Industries and are used as general company revenue.
 There are no perks or entitlements associated with sponsorship.
+
